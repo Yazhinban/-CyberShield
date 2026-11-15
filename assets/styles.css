@@ -1,0 +1,7 @@
+<style>
+.stApp {background:#0b1120;color:#e5edf7}.stApp header {background:#0b1120}.block-container{padding-top:1.4rem;max-width:1500px}
+[data-testid="stSidebar"]{background:#111827;border-right:1px solid #26344a}.stMetric{background:#172033;padding:18px;border:1px solid #26344a;border-radius:12px}
+[data-testid="stMetricLabel"]{color:#a8b5c7}[data-testid="stMetricValue"]{color:#f2f7ff}.stButton>button{border-radius:8px;border:1px solid #3b82f6}
+div[data-testid="stForm"]{background:#111827;padding:18px;border:1px solid #26344a;border-radius:12px}h1,h2,h3{color:#f3f7ff}
+.risk-critical{color:#ef4444;font-weight:700}.risk-high{color:#f97316;font-weight:700}
+</style>
