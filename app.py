@@ -4,7 +4,7 @@ import streamlit as st
 import pandas as pd
 import plotly.express as px
 import plotly.graph_objects as go
-from sqlalchemy import select, func
+from sqlalchemy import select, func, inspect
 from sqlalchemy.exc import IntegrityError
 
 from config import APP_NAME, ASSET_TYPES, THREAT_CATEGORIES, VULNERABILITY_CATEGORIES, RISK_STATUSES, TREATMENT_STRATEGIES, LIKELIHOOD_LABELS, IMPACT_LABELS
@@ -31,6 +31,15 @@ def save_setting(s,key,value):
     s.commit()
 
 def records(s, cls): return list(s.scalars(select(cls).order_by(cls.id.desc())).all())
+def fresh_obj(s, obj):
+    if obj is None or not hasattr(obj, "id"):
+        return obj
+    try:
+        if inspect(obj).detached:
+            return s.get(type(obj), obj.id)
+    except Exception:
+        pass
+    return obj
 def risk_label(r): return classify(r.inherent_score)
 def show_risk_table(risks):
     df=risk_dataframe(risks)
@@ -108,10 +117,11 @@ with get_session() as s:
         st.dataframe(pd.DataFrame([{"ID":f"AST-{a.id:04d}","Name":a.name,"Type":a.asset_type,"Owner":a.owner,"Location":a.location,"Criticality":a.criticality,"Added":a.created_at.strftime("%Y-%m-%d")} for a in filtered]),use_container_width=True,hide_index=True)
         if all_assets:
             with st.expander("Edit or remove asset"):
-                selected=st.selectbox("Select asset",all_assets,format_func=lambda a:f"AST-{a.id:04d} · {a.name}")
+                selected=fresh_obj(s, st.selectbox("Select asset",all_assets,format_func=lambda a:f"AST-{a.id:04d} · {a.name}"))
                 with st.form("asset_edit"):
                     nm=st.text_input("Asset name",selected.name); ow=st.text_input("Owner",selected.owner); loc=st.text_input("Location",selected.location); cr=st.slider("Criticality",1,5,selected.criticality); save=st.form_submit_button("Update asset")
                     if save: selected.name=nm.strip() or selected.name; selected.owner=ow; selected.location=loc; selected.criticality=cr; s.commit(); st.success("Asset updated."); st.rerun()
+                selected = fresh_obj(s, selected)
                 if selected.risks: st.caption(f"This asset has {len(selected.risks)} risk record(s) and cannot be deleted until those records are removed.")
                 elif st.checkbox("Confirm deletion of this asset",key=f"confirm_asset_{selected.id}"):
                     if st.button("Delete selected asset",key="asset_delete"): s.delete(selected); s.commit(); st.success("Asset deleted."); st.rerun()
@@ -127,7 +137,8 @@ with get_session() as s:
         st.dataframe(pd.DataFrame([{"ID":f"THR-{t.id:04d}","Name":t.name,"Category":t.category,"Source":t.source,"Status":t.status,"Description":t.description} for t in threats if q.lower() in f"{t.name} {t.category} {t.source}".lower()]),use_container_width=True,hide_index=True)
         if threats:
             with st.expander("Update or delete threat"):
-                t=st.selectbox("Threat",threats,format_func=lambda x:f"THR-{x.id:04d} · {x.name}"); t.status=st.selectbox("Status",["Active","Monitoring","Inactive"],index=["Active","Monitoring","Inactive"].index(t.status) if t.status in ["Active","Monitoring","Inactive"] else 0); s.commit()
+                t=fresh_obj(s, st.selectbox("Threat",threats,format_func=lambda x:f"THR-{x.id:04d} · {x.name}")); t.status=st.selectbox("Status",["Active","Monitoring","Inactive"],index=["Active","Monitoring","Inactive"].index(t.status) if t.status in ["Active","Monitoring","Inactive"] else 0); s.commit()
+                t = fresh_obj(s, t)
                 if t.risks: st.caption("Threat is linked to risks and cannot be deleted yet.")
                 elif st.checkbox("Confirm deletion of this threat",key=f"confirm_threat_{t.id}"):
                     if st.button("Delete threat"): s.delete(t); s.commit(); st.rerun()
@@ -146,9 +157,10 @@ with get_session() as s:
             st.dataframe(pd.DataFrame([{"ID":f"VUL-{v.id:04d}","Name":v.name,"Asset":v.asset.name,"Category":v.category,"Severity":v.severity,"Status":v.status,"Discovered":v.discovery_date.isoformat()} for v in vulns if q.lower() in f"{v.name} {v.asset.name} {v.category}".lower()]),use_container_width=True,hide_index=True)
             if vulns:
                 with st.expander("Update vulnerability status"):
-                    v=st.selectbox("Vulnerability",vulns,format_func=lambda x:f"VUL-{x.id:04d} · {x.name}"); new_status=st.selectbox("Status",["Open","In Progress","Resolved","Accepted"],index=["Open","In Progress","Resolved","Accepted"].index(v.status));
+                    v=fresh_obj(s, st.selectbox("Vulnerability",vulns,format_func=lambda x:f"VUL-{x.id:04d} · {x.name}")); new_status=st.selectbox("Status",["Open","In Progress","Resolved","Accepted"],index=["Open","In Progress","Resolved","Accepted"].index(v.status));
                     new_name=st.text_input("Vulnerability name",v.name)
                     if st.button("Update vulnerability"): v.status=new_status; v.name=new_name.strip() or v.name; s.commit(); st.success("Vulnerability updated."); st.rerun()
+                    v = fresh_obj(s, v)
                     if v.risks: st.caption("This vulnerability is linked to risk records and cannot be deleted yet.")
                     elif st.checkbox("Confirm deletion of this vulnerability",key=f"confirm_vuln_{v.id}"):
                         if st.button("Delete vulnerability",key="vuln_delete"): s.delete(v); s.commit(); st.success("Vulnerability deleted."); st.rerun()
@@ -177,9 +189,10 @@ with get_session() as s:
         if risks:
             st.download_button("Export filtered risk register · CSV",risk_dataframe(filtered).to_csv(index=False).encode("utf-8-sig"),"cybershield_risk_register.csv","text/csv")
             with st.expander("View or update a risk"):
-                r=st.selectbox("Risk record",risks,format_func=lambda x:f"RSK-{x.id:04d} · {x.asset.name} · {risk_label(x)} ({x.inherent_score})"); status=st.selectbox("Status",RISK_STATUSES,index=RISK_STATUSES.index(r.status)); owner=st.text_input("Risk owner",r.owner); ll=st.select_slider("Likelihood",options=[1,2,3,4,5],value=r.likelihood,key="edit_risk_l"); ii=st.select_slider("Impact",options=[1,2,3,4,5],value=r.impact,key="edit_risk_i")
+                r=fresh_obj(s, st.selectbox("Risk record",risks,format_func=lambda x:f"RSK-{x.id:04d} · {x.asset.name} · {risk_label(x)} ({x.inherent_score})")); status=st.selectbox("Status",RISK_STATUSES,index=RISK_STATUSES.index(r.status)); owner=st.text_input("Risk owner",r.owner); ll=st.select_slider("Likelihood",options=[1,2,3,4,5],value=r.likelihood,key="edit_risk_l"); ii=st.select_slider("Impact",options=[1,2,3,4,5],value=r.impact,key="edit_risk_i")
                 st.caption(f"Updated inherent score: {ll*ii}/25 · {classify(ll*ii)}")
                 if st.button("Save risk changes"): r.status=status; r.owner=owner or "Unassigned"; r.likelihood=ll; r.impact=ii; r.explanation=assess(ll,ii)["explanation"]; s.add(AssessmentHistory(risk_id=r.id,likelihood=ll,impact=ii,residual=False,notes="Risk register reassessment")); s.commit(); st.success("Risk updated."); st.rerun()
+                r = fresh_obj(s, r)
                 if st.checkbox("Confirm deletion of this risk record",key=f"confirm_risk_{r.id}"):
                     if st.button("Delete risk record",type="secondary"): s.delete(r); s.commit(); st.success("Risk record deleted."); st.rerun()
 
@@ -187,7 +200,7 @@ with get_session() as s:
         risks=records(s,Risk)
         if not risks: st.info("Create a risk assessment before planning treatment.")
         else:
-            r=st.selectbox("Risk to treat",risks,format_func=lambda x:f"RSK-{x.id:04d} · {x.asset.name} · {risk_label(x)} ({x.inherent_score})")
+            r=fresh_obj(s, st.selectbox("Risk to treat",risks,format_func=lambda x:f"RSK-{x.id:04d} · {x.asset.name} · {risk_label(x)} ({x.inherent_score})"))
             st.markdown(f"**Scenario:** {r.threat.name} affecting **{r.asset.name}** through {r.vulnerability.name}.")
             recs=recommend(r.threat.name,r.vulnerability.name,r.vulnerability.category)
             st.markdown("**Rule-based mitigation suggestions**")
